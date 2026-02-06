@@ -1,14 +1,16 @@
 import { PublicClient, Address, Hash } from 'viem'
-import { PROVENANCE_REGISTRY_ADDRESS } from './contracts'
+import {
+    PROVENANCE_REGISTRY_ADDRESS,
+    DIGITAL_OBJECT_NFT_ADDRESS,
+    ATTESTATION_KIND
+} from './contracts'
 
-// Types
+// Types for MVP 1
 export interface ProvenanceNode {
-    assetId: bigint
-    parentId: bigint
+    tokenId: bigint
+    parentId: bigint | null  // null for root nodes
     actor: Address
-    action: 'publish' | 'derive'
-    recipeHash: Hash
-    recipeURI: string
+    ref: Hash
     txHash: Hash
     blockNumber: bigint
     children: ProvenanceNode[]
@@ -16,10 +18,11 @@ export interface ProvenanceNode {
 }
 
 export interface AttestationNode {
-    assetId: bigint
-    actor: Address
-    claimHash: Hash
-    claimURI: string
+    tokenId: bigint
+    attester: Address
+    kind: number
+    ref: Hash
+    payloadHash: Hash
     txHash: Hash
     blockNumber: bigint
 }
@@ -32,55 +35,57 @@ export interface ProvenanceGraph {
     maxDepth: number
 }
 
-interface AssetCreatedEventArgs {
-    assetId: bigint
+// Event arguments
+interface DerivedEventArgs {
+    nft: Address
     parentId: bigint
+    childId: bigint
     actor: Address
-    action: number
-    recipeHash: Hash
-    recipeURI: string
+    ref: Hash
 }
 
-interface AssetAttestedEventArgs {
-    assetId: bigint
-    actor: Address
-    claimHash: Hash
-    claimURI: string
+interface AttestedEventArgs {
+    nft: Address
+    tokenId: bigint
+    attester: Address
+    kind: number
+    ref: Hash
+    payloadHash: Hash
 }
 
 // Constants
-const CHUNK_SIZE = 9000n // RPC limit is 10000, use 9000 for safety
-const CONTRACT_DEPLOY_BLOCK = 0n // Start from genesis, will find events quickly
+const CHUNK_SIZE = 9000n
 
-// Event definitions
-const ASSET_CREATED_EVENT = {
+// Event definitions for MVP 1
+const DERIVED_EVENT = {
     type: 'event' as const,
-    name: 'AssetCreated',
+    name: 'Derived',
     inputs: [
-        { indexed: true, name: 'assetId', type: 'uint256' },
+        { indexed: true, name: 'nft', type: 'address' },
         { indexed: true, name: 'parentId', type: 'uint256' },
-        { indexed: true, name: 'actor', type: 'address' },
-        { indexed: false, name: 'action', type: 'uint8' },
-        { indexed: false, name: 'recipeHash', type: 'bytes32' },
-        { indexed: false, name: 'recipeURI', type: 'string' },
+        { indexed: true, name: 'childId', type: 'uint256' },
+        { indexed: false, name: 'actor', type: 'address' },
+        { indexed: false, name: 'ref', type: 'bytes32' },
     ],
 }
 
-const ASSET_ATTESTED_EVENT = {
+const ATTESTED_EVENT = {
     type: 'event' as const,
-    name: 'AssetAttested',
+    name: 'Attested',
     inputs: [
-        { indexed: true, name: 'assetId', type: 'uint256' },
-        { indexed: true, name: 'actor', type: 'address' },
-        { indexed: false, name: 'claimHash', type: 'bytes32' },
-        { indexed: false, name: 'claimURI', type: 'string' },
+        { indexed: true, name: 'nft', type: 'address' },
+        { indexed: true, name: 'tokenId', type: 'uint256' },
+        { indexed: true, name: 'attester', type: 'address' },
+        { indexed: false, name: 'kind', type: 'uint8' },
+        { indexed: false, name: 'ref', type: 'bytes32' },
+        { indexed: false, name: 'payloadHash', type: 'bytes32' },
     ],
 }
 
 // Fetch events in chunks to work around RPC limits
 async function fetchLogsInChunks<T>(
     client: PublicClient,
-    event: typeof ASSET_CREATED_EVENT | typeof ASSET_ATTESTED_EVENT,
+    event: typeof DERIVED_EVENT | typeof ATTESTED_EVENT,
     fromBlock: bigint,
     toBlock: bigint,
     parseLog: (log: { args: unknown; transactionHash: Hash | null; blockNumber: bigint }) => T
@@ -108,7 +113,6 @@ async function fetchLogsInChunks<T>(
             }
         } catch (error) {
             console.error(`Failed to fetch logs from ${currentFrom} to ${currentTo}:`, error)
-            // Continue with next chunk
         }
 
         currentFrom = currentTo + 1n
@@ -117,107 +121,150 @@ async function fetchLogsInChunks<T>(
     return results
 }
 
-// Fetch events from the blockchain
-export async function fetchAssetCreatedEvents(
-    client: PublicClient,
-    fromBlock?: bigint
-): Promise<ProvenanceNode[]> {
-    const currentBlock = await client.getBlockNumber()
-    const startBlock = fromBlock ?? CONTRACT_DEPLOY_BLOCK
+// Parse Derived events into node relationships
+interface DerivedRelation {
+    parentId: bigint
+    childId: bigint
+    actor: Address
+    ref: Hash
+    txHash: Hash
+    blockNumber: bigint
+}
 
-    const parseLog = (log: { args: unknown; transactionHash: Hash | null; blockNumber: bigint }): ProvenanceNode => {
-        const args = log.args as unknown as AssetCreatedEventArgs
+export async function fetchDerivedEvents(
+    client: PublicClient,
+    nftAddress: Address = DIGITAL_OBJECT_NFT_ADDRESS,
+    fromBlock?: bigint
+): Promise<DerivedRelation[]> {
+    const currentBlock = await client.getBlockNumber()
+    const startBlock = fromBlock ?? 0n
+
+    const parseLog = (log: { args: unknown; transactionHash: Hash | null; blockNumber: bigint }): DerivedRelation | null => {
+        const args = log.args as unknown as DerivedEventArgs
+        // Filter by NFT address
+        if (args.nft.toLowerCase() !== nftAddress.toLowerCase()) {
+            return null
+        }
         return {
-            assetId: args.assetId,
             parentId: args.parentId,
+            childId: args.childId,
             actor: args.actor,
-            action: args.action === 0 ? 'publish' : 'derive',
-            recipeHash: args.recipeHash,
-            recipeURI: args.recipeURI,
+            ref: args.ref,
             txHash: log.transactionHash as Hash,
             blockNumber: log.blockNumber,
-            children: [],
-            attestations: [],
         }
     }
 
-    return fetchLogsInChunks(
+    const results = await fetchLogsInChunks(
         client,
-        ASSET_CREATED_EVENT,
+        DERIVED_EVENT,
         startBlock,
         currentBlock,
         parseLog
     )
+
+    return results.filter((r): r is DerivedRelation => r !== null)
 }
 
-export async function fetchAssetAttestedEvents(
+export async function fetchAttestedEvents(
     client: PublicClient,
+    nftAddress: Address = DIGITAL_OBJECT_NFT_ADDRESS,
     fromBlock?: bigint
 ): Promise<AttestationNode[]> {
     const currentBlock = await client.getBlockNumber()
-    const startBlock = fromBlock ?? CONTRACT_DEPLOY_BLOCK
+    const startBlock = fromBlock ?? 0n
 
-    const parseLog = (log: { args: unknown; transactionHash: Hash | null; blockNumber: bigint }): AttestationNode => {
-        const args = log.args as unknown as AssetAttestedEventArgs
+    const parseLog = (log: { args: unknown; transactionHash: Hash | null; blockNumber: bigint }): AttestationNode | null => {
+        const args = log.args as unknown as AttestedEventArgs
+        // Filter by NFT address
+        if (args.nft.toLowerCase() !== nftAddress.toLowerCase()) {
+            return null
+        }
         return {
-            assetId: args.assetId,
-            actor: args.actor,
-            claimHash: args.claimHash,
-            claimURI: args.claimURI,
+            tokenId: args.tokenId,
+            attester: args.attester,
+            kind: args.kind,
+            ref: args.ref,
+            payloadHash: args.payloadHash,
             txHash: log.transactionHash as Hash,
             blockNumber: log.blockNumber,
         }
     }
 
-    return fetchLogsInChunks(
+    const results = await fetchLogsInChunks(
         client,
-        ASSET_ATTESTED_EVENT,
+        ATTESTED_EVENT,
         startBlock,
         currentBlock,
         parseLog
     )
+
+    return results.filter((r): r is AttestationNode => r !== null)
 }
 
-// Build hierarchical graph from flat events
+// Build hierarchical graph from Derived events
 export function buildProvenanceGraph(
-    assets: ProvenanceNode[],
+    derivedEvents: DerivedRelation[],
     attestations: AttestationNode[]
 ): ProvenanceGraph {
-    // Create a map for quick lookup
-    const assetMap = new Map<string, ProvenanceNode>()
+    // Collect all unique token IDs
+    const allTokenIds = new Set<string>()
+    const childToParent = new Map<string, { parentId: bigint; relation: DerivedRelation }>()
 
-    // Index all assets by their ID
-    for (const asset of assets) {
-        assetMap.set(asset.assetId.toString(), { ...asset, children: [], attestations: [] })
+    for (const event of derivedEvents) {
+        allTokenIds.add(event.parentId.toString())
+        allTokenIds.add(event.childId.toString())
+        childToParent.set(event.childId.toString(), { parentId: event.parentId, relation: event })
     }
 
-    // Attach attestations to assets
+    // Build nodes
+    const nodeMap = new Map<string, ProvenanceNode>()
+
+    for (const tokenIdStr of allTokenIds) {
+        const tokenId = BigInt(tokenIdStr)
+        const childInfo = childToParent.get(tokenIdStr)
+
+        const node: ProvenanceNode = {
+            tokenId,
+            parentId: childInfo ? childInfo.parentId : null,
+            actor: childInfo?.relation.actor ?? '0x0000000000000000000000000000000000000000' as Address,
+            ref: childInfo?.relation.ref ?? '0x' + '0'.repeat(64) as Hash,
+            txHash: childInfo?.relation.txHash ?? '0x' + '0'.repeat(64) as Hash,
+            blockNumber: childInfo?.relation.blockNumber ?? 0n,
+            children: [],
+            attestations: [],
+        }
+        nodeMap.set(tokenIdStr, node)
+    }
+
+    // Attach attestations
     for (const attestation of attestations) {
-        const asset = assetMap.get(attestation.assetId.toString())
-        if (asset) {
-            asset.attestations.push(attestation)
+        const node = nodeMap.get(attestation.tokenId.toString())
+        if (node) {
+            node.attestations.push(attestation)
         }
     }
 
     // Build parent-child relationships
     const roots: ProvenanceNode[] = []
 
-    for (const asset of assetMap.values()) {
-        if (asset.parentId === 0n) {
-            // This is a root asset
-            roots.push(asset)
+    for (const node of nodeMap.values()) {
+        if (node.parentId === null) {
+            roots.push(node)
         } else {
-            // This is a derivative, find parent
-            const parent = assetMap.get(asset.parentId.toString())
+            const parent = nodeMap.get(node.parentId.toString())
             if (parent) {
-                parent.children.push(asset)
+                parent.children.push(node)
+            } else {
+                // Parent not found, this becomes a root
+                roots.push(node)
             }
         }
     }
 
     // Calculate stats
-    const totalAssets = assets.length
-    const totalDerivatives = assets.filter(a => a.action === 'derive').length
+    const totalAssets = nodeMap.size
+    const totalDerivatives = derivedEvents.length
     const totalAttestations = attestations.length
 
     // Calculate max depth
@@ -238,11 +285,30 @@ export function buildProvenanceGraph(
 }
 
 // Helper to fetch and build in one call
-export async function fetchProvenanceGraph(client: PublicClient): Promise<ProvenanceGraph> {
-    const [assets, attestations] = await Promise.all([
-        fetchAssetCreatedEvents(client),
-        fetchAssetAttestedEvents(client),
+export async function fetchProvenanceGraph(
+    client: PublicClient,
+    nftAddress: Address = DIGITAL_OBJECT_NFT_ADDRESS
+): Promise<ProvenanceGraph> {
+    const [derivedEvents, attestations] = await Promise.all([
+        fetchDerivedEvents(client, nftAddress),
+        fetchAttestedEvents(client, nftAddress),
     ])
 
-    return buildProvenanceGraph(assets, attestations)
+    return buildProvenanceGraph(derivedEvents, attestations)
+}
+
+// Export attestation kind labels for UI
+export function getAttestationKindLabel(kind: number): string {
+    switch (kind) {
+        case ATTESTATION_KIND.SOURCE:
+            return 'Source'
+        case ATTESTATION_KIND.QUALITY:
+            return 'Quality'
+        case ATTESTATION_KIND.REVIEW:
+            return 'Review'
+        case ATTESTATION_KIND.LICENSE:
+            return 'License'
+        default:
+            return 'Unknown'
+    }
 }

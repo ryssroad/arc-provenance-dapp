@@ -1,6 +1,6 @@
 'use client'
 
-import { ProvenanceNode, AttestationNode } from '@/lib/graph-builder'
+import { ProvenanceNode, AttestationNode, getAttestationKindLabel } from '@/lib/graph-builder'
 import { getExplorerTxUrl, getExplorerAddressUrl } from '@/lib/contracts'
 import {
     Table,
@@ -23,11 +23,12 @@ function formatAddress(address: string): string {
 }
 
 type TransactionRow = {
-    type: 'publish' | 'derive' | 'attest'
+    type: 'root' | 'derive' | 'attest'
     txHash: string
     actor: string
-    assetId: string
+    tokenId: string
     blockNumber: bigint
+    kind?: number  // for attestations
 }
 
 export function TransactionList({ nodes, attestations }: TransactionListProps) {
@@ -48,18 +49,19 @@ export function TransactionList({ nodes, attestations }: TransactionListProps) {
     // Combine all transactions
     const transactions: TransactionRow[] = [
         ...allNodes.map((n) => ({
-            type: n.action as 'publish' | 'derive',
+            type: (n.parentId === null ? 'root' : 'derive') as 'root' | 'derive',
             txHash: n.txHash,
             actor: n.actor,
-            assetId: n.assetId.toString(),
+            tokenId: n.tokenId.toString(),
             blockNumber: n.blockNumber,
         })),
         ...attestations.map((a) => ({
             type: 'attest' as const,
             txHash: a.txHash,
-            actor: a.actor,
-            assetId: a.assetId.toString(),
+            actor: a.attester,
+            tokenId: a.tokenId.toString(),
             blockNumber: a.blockNumber,
+            kind: a.kind,
         })),
     ]
 
@@ -76,11 +78,18 @@ export function TransactionList({ nodes, attestations }: TransactionListProps) {
 
     const getBadgeVariant = (type: string) => {
         switch (type) {
-            case 'publish': return 'default'
+            case 'root': return 'default'
             case 'derive': return 'secondary'
             case 'attest': return 'outline'
             default: return 'default'
         }
+    }
+
+    const getTypeLabel = (tx: TransactionRow) => {
+        if (tx.type === 'attest' && tx.kind !== undefined) {
+            return getAttestationKindLabel(tx.kind)
+        }
+        return tx.type === 'root' ? 'Root' : 'Derive'
     }
 
     return (
@@ -89,7 +98,7 @@ export function TransactionList({ nodes, attestations }: TransactionListProps) {
                 <TableHeader>
                     <TableRow className="hover:bg-transparent border-border/30">
                         <TableHead className="w-24">Type</TableHead>
-                        <TableHead>Asset ID</TableHead>
+                        <TableHead>Token ID</TableHead>
                         <TableHead>Actor</TableHead>
                         <TableHead>Block</TableHead>
                         <TableHead className="text-right">Transaction</TableHead>
@@ -100,11 +109,11 @@ export function TransactionList({ nodes, attestations }: TransactionListProps) {
                         <TableRow key={`${tx.txHash}-${idx}`} className="border-border/30">
                             <TableCell>
                                 <Badge variant={getBadgeVariant(tx.type)} className="capitalize text-xs">
-                                    {tx.type}
+                                    {getTypeLabel(tx)}
                                 </Badge>
                             </TableCell>
                             <TableCell className="font-mono text-sm">
-                                #{tx.assetId}
+                                #{tx.tokenId}
                             </TableCell>
                             <TableCell>
                                 <a

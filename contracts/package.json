@@ -1,0 +1,15 @@
+{
+    "name": "arc-provenance-contracts",
+    "version": "1.0.0",
+    "type": "commonjs",
+    "scripts": {
+        "compile": "npx hardhat compile",
+        "deploy": "npx hardhat run scripts/deploy.ts --network arcTestnet",
+        "verify": "npx hardhat run scripts/verify.ts --network arcTestnet"
+    },
+    "devDependencies": {
+        "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+        "@openzeppelin/contracts": "^5.0.0",
+        "hardhat": "^2.22.0"
+    }
+}

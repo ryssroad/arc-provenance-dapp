@@ -1,6 +1,6 @@
 'use client'
 
-import { ProvenanceNode, AttestationNode } from '@/lib/graph-builder'
+import { ProvenanceNode, AttestationNode, getAttestationKindLabel } from '@/lib/graph-builder'
 import { Badge } from '@/components/ui/badge'
 import { getExplorerTxUrl, getExplorerAddressUrl } from '@/lib/contracts'
 import { ExternalLink, FileText, GitBranch, CheckCircle } from 'lucide-react'
@@ -14,7 +14,7 @@ function formatAddress(address: string): string {
 }
 
 function NodeCard({ node, depth = 0 }: { node: ProvenanceNode; depth?: number }) {
-    const isRoot = node.action === 'publish'
+    const isRoot = node.parentId === null
 
     return (
         <div className="relative">
@@ -43,7 +43,7 @@ function NodeCard({ node, depth = 0 }: { node: ProvenanceNode; depth?: number })
                                 {isRoot ? 'Root' : 'Derivative'}
                             </Badge>
                             <span className="text-sm font-mono text-muted-foreground">
-                                #{node.assetId.toString()}
+                                #{node.tokenId.toString()}
                             </span>
                         </div>
 
@@ -60,15 +60,6 @@ function NodeCard({ node, depth = 0 }: { node: ProvenanceNode; depth?: number })
                                     <ExternalLink className="w-3 h-3" />
                                 </a>
                             </div>
-
-                            {node.recipeURI && (
-                                <div className="flex items-center gap-2 truncate">
-                                    <span className="text-muted-foreground">Recipe:</span>
-                                    <span className="font-mono text-xs truncate opacity-60">
-                                        {node.recipeURI.length > 40 ? node.recipeURI.slice(0, 40) + '...' : node.recipeURI}
-                                    </span>
-                                </div>
-                            )}
                         </div>
                     </div>
 
@@ -105,7 +96,7 @@ function NodeCard({ node, depth = 0 }: { node: ProvenanceNode; depth?: number })
             {node.children.length > 0 && (
                 <div className="ml-6 mt-3 space-y-3">
                     {node.children.map((child) => (
-                        <NodeCard key={child.assetId.toString()} node={child} depth={depth + 1} />
+                        <NodeCard key={child.tokenId.toString()} node={child} depth={depth + 1} />
                     ))}
                 </div>
             )}
@@ -114,19 +105,21 @@ function NodeCard({ node, depth = 0 }: { node: ProvenanceNode; depth?: number })
 }
 
 function AttestationCard({ attestation }: { attestation: AttestationNode }) {
+    const kindLabel = getAttestationKindLabel(attestation.kind)
+
     return (
         <div className="flex items-center justify-between gap-2 p-2 rounded bg-emerald-500/10 border border-emerald-500/20">
             <div className="flex items-center gap-2 min-w-0">
                 <Badge variant="outline" className="text-xs border-emerald-500/50 text-emerald-400">
-                    Attested
+                    {kindLabel}
                 </Badge>
                 <a
-                    href={getExplorerAddressUrl(attestation.actor)}
+                    href={getExplorerAddressUrl(attestation.attester)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="font-mono text-xs text-emerald-400 hover:underline"
                 >
-                    {formatAddress(attestation.actor)}
+                    {formatAddress(attestation.attester)}
                 </a>
             </div>
             <a
@@ -155,7 +148,7 @@ export function ProvenanceGraphView({ roots }: ProvenanceGraphViewProps) {
     return (
         <div className="space-y-6">
             {roots.map((root) => (
-                <NodeCard key={root.assetId.toString()} node={root} />
+                <NodeCard key={root.tokenId.toString()} node={root} />
             ))}
         </div>
     )

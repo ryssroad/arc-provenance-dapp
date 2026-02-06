@@ -1,5 +1,6 @@
 import { Address, Hash } from 'viem'
 import { ProvenanceNode, AttestationNode, ProvenanceGraph } from './graph-builder'
+import { ATTESTATION_KIND } from './contracts'
 
 // Mock addresses
 const MOCK_ACTORS: Address[] = [
@@ -11,18 +12,14 @@ const MOCK_ACTORS: Address[] = [
 
 const MOCK_HASH = '0x' + 'a'.repeat(64) as Hash
 
-// Generate mock provenance data
+// Generate mock provenance data for MVP 1
 export function generateMockProvenanceGraph(): ProvenanceGraph {
-    const now = BigInt(Math.floor(Date.now() / 1000))
-
-    // Root assets
+    // Root assets (parentId = null)
     const root1: ProvenanceNode = {
-        assetId: 1n,
-        parentId: 0n,
+        tokenId: 1n,
+        parentId: null,
         actor: MOCK_ACTORS[0],
-        action: 'publish',
-        recipeHash: MOCK_HASH,
-        recipeURI: 'ipfs://QmExample1/metadata.json',
+        ref: MOCK_HASH,
         txHash: '0x' + '1'.repeat(64) as Hash,
         blockNumber: 1000n,
         children: [],
@@ -30,12 +27,10 @@ export function generateMockProvenanceGraph(): ProvenanceGraph {
     }
 
     const root2: ProvenanceNode = {
-        assetId: 2n,
-        parentId: 0n,
+        tokenId: 2n,
+        parentId: null,
         actor: MOCK_ACTORS[1],
-        action: 'publish',
-        recipeHash: MOCK_HASH,
-        recipeURI: 'ipfs://QmExample2/metadata.json',
+        ref: MOCK_HASH,
         txHash: '0x' + '2'.repeat(64) as Hash,
         blockNumber: 1050n,
         children: [],
@@ -44,12 +39,10 @@ export function generateMockProvenanceGraph(): ProvenanceGraph {
 
     // Derivatives of root1
     const derivative1: ProvenanceNode = {
-        assetId: 3n,
+        tokenId: 3n,
         parentId: 1n,
         actor: MOCK_ACTORS[2],
-        action: 'derive',
-        recipeHash: MOCK_HASH,
-        recipeURI: 'ipfs://QmDerivative1/metadata.json',
+        ref: MOCK_HASH,
         txHash: '0x' + '3'.repeat(64) as Hash,
         blockNumber: 1100n,
         children: [],
@@ -57,12 +50,10 @@ export function generateMockProvenanceGraph(): ProvenanceGraph {
     }
 
     const derivative2: ProvenanceNode = {
-        assetId: 4n,
+        tokenId: 4n,
         parentId: 1n,
         actor: MOCK_ACTORS[3],
-        action: 'derive',
-        recipeHash: MOCK_HASH,
-        recipeURI: 'ipfs://QmDerivative2/metadata.json',
+        ref: MOCK_HASH,
         txHash: '0x' + '4'.repeat(64) as Hash,
         blockNumber: 1150n,
         children: [],
@@ -71,42 +62,43 @@ export function generateMockProvenanceGraph(): ProvenanceGraph {
 
     // Sub-derivative (depth 3)
     const subDerivative: ProvenanceNode = {
-        assetId: 5n,
+        tokenId: 5n,
         parentId: 3n,
         actor: MOCK_ACTORS[0],
-        action: 'derive',
-        recipeHash: MOCK_HASH,
-        recipeURI: 'ipfs://QmSubDerivative/metadata.json',
+        ref: MOCK_HASH,
         txHash: '0x' + '5'.repeat(64) as Hash,
         blockNumber: 1200n,
         children: [],
         attestations: [],
     }
 
-    // Attestations
+    // Attestations with kind
     const attestation1: AttestationNode = {
-        assetId: 1n,
-        actor: MOCK_ACTORS[1],
-        claimHash: '0x' + 'b'.repeat(64) as Hash,
-        claimURI: 'ipfs://QmAttestation1/claim.json',
+        tokenId: 1n,
+        attester: MOCK_ACTORS[1],
+        kind: ATTESTATION_KIND.SOURCE,
+        ref: '0x' + 'b'.repeat(64) as Hash,
+        payloadHash: '0x' + 'c'.repeat(64) as Hash,
         txHash: '0x' + 'a1'.padEnd(64, '0') as Hash,
         blockNumber: 1075n,
     }
 
     const attestation2: AttestationNode = {
-        assetId: 1n,
-        actor: MOCK_ACTORS[2],
-        claimHash: '0x' + 'c'.repeat(64) as Hash,
-        claimURI: 'ipfs://QmAttestation2/claim.json',
+        tokenId: 1n,
+        attester: MOCK_ACTORS[2],
+        kind: ATTESTATION_KIND.QUALITY,
+        ref: '0x' + 'd'.repeat(64) as Hash,
+        payloadHash: '0x' + 'e'.repeat(64) as Hash,
         txHash: '0x' + 'a2'.padEnd(64, '0') as Hash,
         blockNumber: 1080n,
     }
 
     const attestation3: AttestationNode = {
-        assetId: 3n,
-        actor: MOCK_ACTORS[3],
-        claimHash: '0x' + 'd'.repeat(64) as Hash,
-        claimURI: 'ipfs://QmAttestation3/claim.json',
+        tokenId: 3n,
+        attester: MOCK_ACTORS[3],
+        kind: ATTESTATION_KIND.REVIEW,
+        ref: '0x' + 'f'.repeat(64) as Hash,
+        payloadHash: '0x' + '0'.repeat(64) as Hash,
         txHash: '0x' + 'a3'.padEnd(64, '0') as Hash,
         blockNumber: 1125n,
     }
@@ -126,42 +118,13 @@ export function generateMockProvenanceGraph(): ProvenanceGraph {
     }
 }
 
-// Get all transactions from mock data for display
-export function getMockTransactions(): Array<{
-    txHash: Hash
-    blockNumber: bigint
-    type: 'publish' | 'derive' | 'attest'
-    assetId: bigint
-    actor: Address
-}> {
+// Get all attestations from mock data
+export function getMockAttestations(): AttestationNode[] {
     const graph = generateMockProvenanceGraph()
-    const transactions: Array<{
-        txHash: Hash
-        blockNumber: bigint
-        type: 'publish' | 'derive' | 'attest'
-        assetId: bigint
-        actor: Address
-    }> = []
+    const attestations: AttestationNode[] = []
 
     function collectFromNode(node: ProvenanceNode) {
-        transactions.push({
-            txHash: node.txHash,
-            blockNumber: node.blockNumber,
-            type: node.action,
-            assetId: node.assetId,
-            actor: node.actor,
-        })
-
-        for (const attestation of node.attestations) {
-            transactions.push({
-                txHash: attestation.txHash,
-                blockNumber: attestation.blockNumber,
-                type: 'attest',
-                assetId: attestation.assetId,
-                actor: attestation.actor,
-            })
-        }
-
+        attestations.push(...node.attestations)
         for (const child of node.children) {
             collectFromNode(child)
         }
@@ -171,6 +134,5 @@ export function getMockTransactions(): Array<{
         collectFromNode(root)
     }
 
-    // Sort by block number descending
-    return transactions.sort((a, b) => Number(b.blockNumber - a.blockNumber))
+    return attestations
 }
