@@ -55,6 +55,8 @@ interface AttestedEventArgs {
 
 // Constants
 const CHUNK_SIZE = 9000n
+// Contract deployed around 2026-02-06, block ~25.6M
+const CONTRACT_DEPLOY_BLOCK = 25600000n
 
 // Event definitions for MVP 1
 const DERIVED_EVENT = {
@@ -137,7 +139,7 @@ export async function fetchDerivedEvents(
     fromBlock?: bigint
 ): Promise<DerivedRelation[]> {
     const currentBlock = await client.getBlockNumber()
-    const startBlock = fromBlock ?? 0n
+    const startBlock = fromBlock ?? CONTRACT_DEPLOY_BLOCK
 
     const parseLog = (log: { args: unknown; transactionHash: Hash | null; blockNumber: bigint }): DerivedRelation | null => {
         const args = log.args as unknown as DerivedEventArgs
@@ -172,7 +174,7 @@ export async function fetchAttestedEvents(
     fromBlock?: bigint
 ): Promise<AttestationNode[]> {
     const currentBlock = await client.getBlockNumber()
-    const startBlock = fromBlock ?? 0n
+    const startBlock = fromBlock ?? CONTRACT_DEPLOY_BLOCK
 
     const parseLog = (log: { args: unknown; transactionHash: Hash | null; blockNumber: bigint }): AttestationNode | null => {
         const args = log.args as unknown as AttestedEventArgs
